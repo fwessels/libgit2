@@ -678,59 +678,17 @@ static int store_refs(git_remote_head *head, void *payload)
 	return git_vector_insert(refs, head);
 }
 
-static int dwim_refspecs(git_vector *refspecs, git_vector *refs)
+/* DWIM `refspecs` based on `refs` and append the output to `out` */
+static int dwim_refspecs(git_vector *out, git_vector *refspecs, git_vector *refs)
 {
-	git_buf buf = GIT_BUF_INIT;
+	size_t i;
 	git_refspec *spec;
-	size_t i, j, pos;
-	git_remote_head key;
-
-	const char* formatters[] = {
-		GIT_REFS_DIR "%s",
-		GIT_REFS_TAGS_DIR "%s",
-		GIT_REFS_HEADS_DIR "%s",
-		NULL
-	};
 
 	git_vector_foreach(refspecs, i, spec) {
-		if (spec->dwim)
-			continue;
-
-		/* shorthand on the lhs */
-		if (git__prefixcmp(spec->src, GIT_REFS_DIR)) {
-			for (j = 0; formatters[j]; j++) {
-				git_buf_clear(&buf);
-				if (git_buf_printf(&buf, formatters[j], spec->src) < 0)
-					return -1;
-
-				key.name = (char *) git_buf_cstr(&buf);
-				if (!git_vector_search(&pos, refs, &key)) {
-					/* we found something to match the shorthand, set src to that */
-					git__free(spec->src);
-					spec->src = git_buf_detach(&buf);
-				}
-			}
-		}
-
-		if (spec->dst && git__prefixcmp(spec->dst, GIT_REFS_DIR)) {
-			/* if it starts with "remotes" then we just prepend "refs/" */
-			if (!git__prefixcmp(spec->dst, "remotes/")) {
-				git_buf_puts(&buf, GIT_REFS_DIR);
-			} else {
-				git_buf_puts(&buf, GIT_REFS_HEADS_DIR);
-			}
-
-			if (git_buf_puts(&buf, spec->dst) < 0)
-				return -1;
-
-			git__free(spec->dst);
-			spec->dst = git_buf_detach(&buf);
-		}
-
-		spec->dwim = 1;
+		if (git_refspec__dwim_one(out, spec, refs) < 0)
+			return -1;
 	}
 
-	git_buf_free(&buf);
 	return 0;
 }
 
@@ -749,14 +707,17 @@ int git_remote_download(git_remote *remote)
 
 	assert(remote);
 
-	if (git_vector_init(&refs, 16, remote_head_cmp) < 0)
+	if (git_vector_init(&refs, 8, remote_head_cmp) < 0)
+		return -1;
+
+	if (git_vector_init(&remote->active_refspecs, 8, NULL) < 0)
 		return -1;
 
 	if (git_remote_ls(remote, store_refs, &refs) < 0) {
 		return -1;
 	}
 
-	error = dwim_refspecs(&remote->refspecs, &refs);
+	error = dwim_refspecs(&remote->active_refspecs, &remote->refspecs, &refs);
 	git_vector_free(&refs);
 	if (error < 0)
 		return -1;
@@ -1018,7 +979,7 @@ int git_remote_update_tips(git_remote *remote)
 		goto out;
 	}
 
-	git_vector_foreach(&remote->refspecs, i, spec) {
+	git_vector_foreach(&remote->active_refspecs, i, spec) {
 		if (spec->push)
 			continue;
 
@@ -1027,6 +988,7 @@ int git_remote_update_tips(git_remote *remote)
 	}
 
 	/* If we have no refspecs, update HEAD -> FETCH_HEAD manually */
+#if 0
 	if (remote->refspecs.length == 0 && refs.length > 0 && git_remote_update_fetchhead(remote)) {
 		git_vector vec;
 		git_refspec headspec;
@@ -1046,6 +1008,7 @@ int git_remote_update_tips(git_remote *remote)
 		error = git_remote_write_fetchhead(remote, &headspec, &vec);
 		git_vector_free(&vec);
 	}
+#endif
 
 out:
 	git_refspec__free(&tagspec);
@@ -1511,7 +1474,7 @@ git_refspec *git_remote__matching_refspec(git_remote *remote, const char *refnam
 	git_refspec *spec;
 	size_t i;
 
-	git_vector_foreach(&remote->refspecs, i, spec) {
+	git_vector_foreach(&remote->active_refspecs, i, spec) {
 		if (spec->push)
 			continue;
 

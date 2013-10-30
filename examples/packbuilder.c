@@ -11,7 +11,6 @@
 #define UNUSED(x) (void)(x)
 
 static git_repository *_repo;
-static git_revwalk *_revwalker;
 static git_packbuilder *_packbuilder;
 static git_indexer_stream *_indexer;
 
@@ -27,7 +26,6 @@ bool index_cache_has_key(const git_oid *id);
 
 void packbuilder_initialize(void)
 {
-	git_revwalk_new(&_revwalker, _repo);
 	git_packbuilder_new(&_packbuilder, _repo);
 }
 
@@ -35,9 +33,6 @@ void packbuilder_cleanup(void)
 {
 	git_packbuilder_free(_packbuilder);
 	_packbuilder = NULL;
-
-	git_revwalk_free(_revwalker);
-	_revwalker = NULL;
 
 	git_indexer_stream_free(_indexer);
 	_indexer = NULL;
@@ -62,41 +57,11 @@ static int cb_tree_walk(const char *root, const git_tree_entry *entry, void *con
 	return git_packbuilder_insert((git_packbuilder *)context, git_tree_entry_id(entry), NULL);
 }
 
-/*
-void walk_tree()
-{
-	git_oid oid;
-	
-	git_revwalk_sorting(_revwalker, GIT_SORT_TIME);
-	git_revwalk_push_ref(_revwalker, "HEAD");
-	
-    while (git_revwalk_next(&oid, _revwalker) == 0) {
-		char oidstr[GIT_OID_HEXSZ + 1];
-		git_oid_tostr(oidstr, sizeof(oidstr), oid);
-			  	printf("commit: %s\n", oidstr);
-		
-		// o = git__malloc(GIT_OID_RAWSZ);
-		// git_oid_cpy(o, &oid);
-		// cl_git_pass(git_vector_insert(&_commits, o));
-    }
-}
-*/
 bool setup_packbuilder(git_oid *oid, int number)
 {	
-	// git_revwalk_sorting(_revwalker, GIT_SORT_TIME);
-	// git_revwalk_push_ref(_revwalker, "HEAD");
-
-	// git_revwalk_sorting(_revwalker, /*GIT_SORT_TOPOLOGICAL |*/ GIT_SORT_REVERSE);
-    // git_revwalk_sorting(_revwalker, GIT_SORT_TIME | GIT_SORT_REVERSE);
-	// git_revwalk_push(_revwalker, &head_oid);
-
 	int i;
-	for (i = 0; i < number; i++ /*git_revwalk_next(&oid, _revwalker) == 0*/) {
+	for (i = 0; i < number; i++) {
 				
-		// char oidstr[GIT_OID_HEXSZ + 1];
-		// git_oid_tostr(oidstr, sizeof(oidstr), oid);
-		// 	  	printf("commit: %s\n", oidstr);
-
 		/* Add commit to packbuilder */
 		if (!index_cache_has_key(oid)) {
 			git_oid *o = git__malloc(GIT_OID_RAWSZ); git_oid_cpy(o, oid);
@@ -106,9 +71,6 @@ bool setup_packbuilder(git_oid *oid, int number)
 		git_commit *commit;
 		git_commit_lookup(&commit, _repo, oid);
 
-		// git_oid_tostr(oidstr, sizeof(oidstr), git_commit_tree_id(commit));
-		// 	  	printf("  tree: %s\n", oidstr);
-		
 		/* Add tree to packbuilder */
 		if (!index_cache_has_key(git_commit_tree_id(commit))) {
 			git_oid *o = git__malloc(GIT_OID_RAWSZ); git_oid_cpy(o, git_commit_tree_id(commit));
@@ -132,21 +94,12 @@ bool setup_packbuilder(git_oid *oid, int number)
 		else if (parents == 1) {
 			char out[41]; out[40] = '\0';
 			
-			// const git_oid *p_oid = git_commit_parent_id(commit, 0);
-			// git_oid_fmt(out, p_oid);
-			// printf("Parent: %s\n", out);
-			
 			git_commit *parent = NULL;
-			int error;
-			error = git_commit_parent(&parent, commit, 0);
-			// printf("after git_commit_parent: error = %d, parent = %08x\n", error, (unsigned long)parent);
-			// printf("before git_commit_id(parent)\n");
-			const git_oid *parent_oid = git_commit_id(parent);
-			// printf(" after git_commit_id(parent)\n");
-			// git_oid_fmt(out, parent_oid);
-			// printf("Parent: %s\n", out);
-						
-			git_oid_cpy(oid, parent_oid);
+			if (git_commit_parent(&parent, commit, 0) < 0) {
+				fprintf(stderr, "Failed to lookup parent\n");
+				exit(-1);
+			}
+			git_oid_cpy(oid, git_commit_id(parent));
 			git_commit_free(commit);
 			git_commit_free(parent);
 			continue;
@@ -160,12 +113,8 @@ bool setup_packbuilder(git_oid *oid, int number)
 	return false;
 }
 
-// static int feed_indexer_count = 0;
-
 static int feed_indexer(void *ptr, size_t len, void *payload)
 {
-	// feed_indexer_count++;
-	// if (feed_indexer_count % 1000 == 0) fprintf(stderr, "feed_indexder: %d\n", feed_indexer_count);
 	git_transfer_progress *stats = (git_transfer_progress *)payload;
 
 	return git_indexer_stream_add(_indexer, ptr, len, stats);
@@ -179,7 +128,7 @@ bool packbuilder_create_pack(git_oid *oid, int number)
 
 	bool last_pack = setup_packbuilder(oid, number);
 
-	git_indexer_stream_new(&_indexer, ".", NULL, NULL);
+	git_indexer_stream_new(&_indexer, ".", NULL, NULL, NULL);
 	git_packbuilder_foreach(_packbuilder, feed_indexer, &stats);
 	git_indexer_stream_finalize(_indexer, &stats);
 
@@ -187,12 +136,6 @@ bool packbuilder_create_pack(git_oid *oid, int number)
 	sprintf(index_file_to_add, "pack-%s.idx", hex);
 	printf("adding to index: %s\n", index_file_to_add);
 	add_to_index_cache(index_file_to_add);
-
-	// git_oid oid_search;
-	//     git_oid_fromstr(&oid_search, "0d42b46341e49da5ef456b09c17ae2081fcd49b9");
-	// 
-	// bool found = index_cache_has_key(&oid_search);
-	// printf("%s", found ? "yes" : "no");
 
 	return last_pack;
 }
@@ -208,19 +151,16 @@ int * read_index(const char *name)
 	int *buffer;
 	unsigned long fileLen;
 
-	// Open file
 	file = fopen(name, "rb");
 	if (!file) {
 		fprintf(stderr, "Unable to open file %s\n", name);
 		return NULL;
 	}
 	
-	// Get file length
 	fseek(file, 0, SEEK_END);
 	fileLen = ftell(file);
 	fseek(file, 0, SEEK_SET);
 
-	// Allocate memory
 	buffer = (int *)malloc(fileLen);
 	if (!buffer) {
 		fprintf(stderr, "Unable to allocate memory\n");
@@ -228,25 +168,12 @@ int * read_index(const char *name)
 		return NULL;
 	}
 
-	// Read file contents into buffer
 	fread(buffer, fileLen, 1, file);
 	fclose(file);
 
 	// Check version 2 of index file (see https://www.kernel.org/pub/software/scm/git/docs/technical/pack-format.txt) 
 	unsigned int magic   = get_big_endian_int(&buffer[0]);
 	unsigned int version = get_big_endian_int(&buffer[1]);
-	
-	int * index = (int*) &buffer[2];
-	int i, n, nr;
-	nr = 0;
-	for (i = 0; i < 256; i++) {
-			uint32_t n = ntohl(index[i]);
-			printf("n from index = %d\n", n);
-			if (n < nr) {
-				printf("Failed to check index. Index is non-monotonic");
-			}
-			nr = n;
-	}
 	
 	if (magic != 0xff744f63 || version != 2) {
 		fprintf(stderr, "Bad magic (%08x) or bad version (%d)\n", magic, version);
@@ -264,7 +191,7 @@ static int * index_cache[INDEX_SIZE];
 void add_to_index_cache(const char *name)
 {
 	if (index_cache_entries == INDEX_SIZE - 1) {
-		/* Remove hard limit on index cache */
+		/* TODO: Remove hard limit on index cache */
 		fprintf(stderr, "Index size too small -- aborting!\n");
 		exit(-1);
 	}
@@ -284,10 +211,9 @@ bool index_cache_has_key(const git_oid *id)
 bool index_has_key(int *index, const git_oid *id)
 {
 	int fanout_255 = get_big_endian_int(&index[2 + 255]);
-	// printf("fanout[255] = %d\n", fanout_255);
   
 	int i = 0;
-	/* We could do a binary search here for performance optimization */
+	/* TODO: We could do a binary search here for performance optimization */
 	for (; i < fanout_255; i++) {
 		
 		void *oid = &index[2 + 256 + i * (20 / 4)];
@@ -306,6 +232,11 @@ int main (int argc, char** argv)
 
 	git_threads_init();
 
+	fprintf(stderr, "/* TODO: Read initial set of .idx files into cache */\n");
+	fprintf(stderr, "/* TODO: Verify extracted objects from generated pack file match with original loose object (and delete loose object) */\n");
+	/* TODO: Make stepsize configurable or command line arguments */
+	/* TODO: Optional: combine multiple pack files into single pack file */
+
 	if (argc > 1)
 		dir = argv[1];
 	if (!dir || argc > 2) {
@@ -313,27 +244,27 @@ int main (int argc, char** argv)
 		return 1;
 	}
 
-	if (git_repository_open_ext(&_repo, dir, 0 /*GIT_REPOSITORY_OPEN_BARE*/, NULL) < 0) {
+	if (git_repository_open_ext(&_repo, dir, 0, NULL) < 0) {
 		fprintf(stderr, "could not open repository: %s\n", dir);
 		return 1;
 	}
 	
-	git_oid oid_search;
-    git_oid_fromstr(&oid_search, "c8832a1cce1f663aef958c6b48ec9e1677bc83ab");
-
-	add_to_index_cache("/Users/frankw/rails_app/libgit2/examples/entries1000/pack-3e883c49486c4c68e8ba1d2b6d95bdb00dd4fff6.idx");
-//	add_to_index_cache("/Users/frankw/rails_app/libgit2/examples/entries1000/pack-000d33de66ebef30c32f1c157efd100f42e1ab3c.idx");
-	bool found = index_cache_has_key(&oid_search);
-	printf("%s", found ? "yes" : "no");
-	return -1;
-
+	git_reference *reference;
+	if (git_repository_head(&reference, _repo) < 0) {
+		fprintf(stderr, "could not get head reference\n");
+		return 1;
+	}
+	
 	git_oid oid;
-    git_oid_fromstr(&oid, "14e89d2dede53af2c76ea85e014ab832e95a4323");
+	if (git_reference_name_to_id(&oid, _repo, "HEAD") < 0) {
+		fprintf(stderr, "Failed to lookup HEAD reference and resolve to OID\n");
+		return 1;
+	}
 
 	int i = 0;
 	bool last_pack = false;
-	#define STEP_SIZE 500
-	for (; /*i < 5000 &&*/ !last_pack; i += STEP_SIZE) {
+	#define STEP_SIZE 1000
+	for (; /*i < 1000 &&*/ !last_pack; i += STEP_SIZE) {
 		
 		char oidstr[GIT_OID_HEXSZ + 1];
 		git_oid_tostr(oidstr, sizeof(oidstr), &oid);

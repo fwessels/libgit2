@@ -233,8 +233,7 @@ int main (int argc, char** argv)
 	git_threads_init();
 
 	fprintf(stderr, "/* TODO: Read initial set of .idx files into cache */\n");
-	fprintf(stderr, "/* TODO: Verify extracted objects from generated pack file match with original loose object (and delete loose object) */\n");
-	/* TODO: Make stepsize configurable or command line arguments */
+	/* TODO: Make stepsize configurable or command line argument */
 	/* TODO: Optional: combine multiple pack files into single pack file */
 
 	if (argc > 1)
